@@ -68,9 +68,7 @@ class EventBus:
         self._lock = threading.RLock()
         self._strict = False
         self._keep_history = keep_history
-        self._history: deque[Event] | None = (
-            deque(maxlen=history_size) if keep_history else None
-        )
+        self._history: deque[Event] | None = deque(maxlen=history_size) if keep_history else None
         self._error_cb: ErrorCallback = (
             handler_error_callback if handler_error_callback is not None else _default_error_cb
         )
@@ -281,9 +279,7 @@ def _validate_pattern(pattern: str) -> None:
         if not seg:
             raise ValueError(f"pattern has empty segment: {pattern!r}")
         if seg == "**" and i != len(segments) - 1:
-            raise ValueError(
-                f"`**` is only allowed as the final segment of a pattern: {pattern!r}"
-            )
+            raise ValueError(f"`**` is only allowed as the final segment of a pattern: {pattern!r}")
 
 
 def _matches(pattern: str, event_type: str) -> bool:

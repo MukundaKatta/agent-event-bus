@@ -98,6 +98,17 @@ def test_invalid_pattern_rejected():
         bus.on("a.**.b", lambda e: None)
 
 
+def test_root_double_wildcard_with_star_head_matches():
+    # `*.**` exercises the `*` head segment on the `**` tail path.
+    bus = EventBus()
+    seen = []
+    bus.on("*.**", lambda e: seen.append(e.type))
+    bus.emit("a.b")  # matches: any first segment, >=1 tail segment
+    bus.emit("x.y.z")  # matches
+    bus.emit("a")  # does not match: `**` needs a tail beyond the `*` head
+    assert seen == ["a.b", "x.y.z"]
+
+
 # ---------- multiple subscribers + order ----------
 
 
@@ -213,6 +224,32 @@ def test_strict_mode_re_raises():
         bus.emit("e")
 
 
+def test_strict_property_reflects_set_strict():
+    bus = EventBus()
+    assert bus.strict is False
+    bus.set_strict(True)
+    assert bus.strict is True
+    bus.set_strict(False)
+    assert bus.strict is False
+
+
+def test_error_callback_that_raises_does_not_break_dispatch():
+    # A buggy error callback must not stop the bus from running later handlers.
+    def bad_cb(event, handler, exc):
+        raise RuntimeError("observer is broken")
+
+    bus = EventBus(handler_error_callback=bad_cb)
+    seen = []
+
+    def boom(_e: Event) -> None:
+        raise ValueError("nope")
+
+    bus.on("e", boom)
+    bus.on("e", lambda e: seen.append(e.type))
+    bus.emit("e")  # must not propagate the callback's RuntimeError
+    assert seen == ["e"]
+
+
 def test_custom_error_callback_called():
     seen = []
 
@@ -261,6 +298,20 @@ def test_history_n_param():
         bus.emit(f"e.{i}")
     assert len(bus.history(n=2)) == 2
     assert bus.history(n=2)[-1].type == "e.4"
+
+
+def test_invalid_history_size_rejected():
+    with pytest.raises(ValueError):
+        EventBus(keep_history=True, history_size=0)
+    with pytest.raises(ValueError):
+        EventBus(history_size=-1)
+
+
+def test_history_negative_n_rejected():
+    bus = EventBus(keep_history=True)
+    bus.emit("a")
+    with pytest.raises(ValueError):
+        bus.history(n=-1)
 
 
 # ---------- Event shape ----------
@@ -334,6 +385,21 @@ async def test_async_handlers_run_concurrently():
     assert set(done) == {"a", "b", "c"}
 
 
+def test_sync_emit_drives_async_handler_to_completion():
+    # When emit() is called with no running loop, an async handler is driven
+    # to completion inline via asyncio.run.
+    bus = EventBus()
+    seen = []
+
+    async def h(e: Event) -> None:
+        await asyncio.sleep(0)
+        seen.append(e.type)
+
+    bus.on("e", h)
+    bus.emit("e")
+    assert seen == ["e"]
+
+
 async def test_async_strict_mode_re_raises():
     bus = EventBus()
     bus.set_strict(True)
@@ -344,6 +410,23 @@ async def test_async_strict_mode_re_raises():
     bus.on("e", bad)
     with pytest.raises(RuntimeError, match="boom-async"):
         await bus.emit_async("e")
+
+
+async def test_async_path_sync_handler_error_forwarded():
+    # On the async path, a *sync* handler that raises is caught and forwarded
+    # to the error callback, and later handlers still run.
+    seen = []
+    errors = []
+    bus = EventBus(handler_error_callback=lambda evt, h, exc: errors.append(type(exc).__name__))
+
+    def boom(_e: Event) -> None:
+        raise KeyError("missing")
+
+    bus.on("e", boom)
+    bus.on("e", lambda e: seen.append(e.type))
+    await bus.emit_async("e")
+    assert errors == ["KeyError"]
+    assert seen == ["e"]
 
 
 async def test_async_error_callback_invoked():
@@ -396,6 +479,7 @@ def test_concurrent_subscribe_and_emit_is_safe():
 
     def sub_worker():
         for _ in range(50):
+
             def h(evt, seen=seen, seen_lock=seen_lock):
                 with seen_lock:
                     seen.append(1)
